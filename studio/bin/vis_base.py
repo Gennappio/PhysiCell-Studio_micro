@@ -315,8 +315,8 @@ class VisBase():
 
         self.vis_filter_init_flag = True
 
-        self.studio_flag = studio_flag 
-        self.rules_flag = rules_flag 
+        self.studio_flag = studio_flag
+        self.rules_flag = rules_flag
 
         self.microenv_tab = microenv_tab
         self.celldef_tab = celldef_tab
@@ -328,10 +328,10 @@ class VisBase():
         self.save_png= False
 
         # self.vis2D = True
-        self.model3D_flag = model3D_flag 
+        self.model3D_flag = model3D_flag
         print("--- VisBase: model3D_flag=",model3D_flag)
-        self.tensor_flag = tensor_flag 
-        self.ecm_flag = ecm_flag 
+        self.tensor_flag = tensor_flag
+        self.ecm_flag = ecm_flag
 
         if not self.model3D_flag:
             # self.discrete_cell_scalars = ['cell_type', 'cycle_model', 'current_phase','is_motile','current_death_model','dead', 'number_of_nuclei']
@@ -351,7 +351,40 @@ class VisBase():
 
         self.bgcolor = [1,1,1,1]  # all 1.0 for white 
 
-        self.discrete_variable_observed = set()
+        # self.population_plot = None
+        self.animating_flag = False
+        self.xml_root = None
+        self.current_svg_frame = 0
+        self.current_frame = 0
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.play_plot_cb)
+
+        self.figure = None
+
+        self.output_dir = "."   # for nanoHUB
+
+        # self.output_dir = "../tmpdir"   # for nanoHUB
+        # self.output_dir = "tmpdir"
+
+        # these will be set in studio.py
+        self.config_file = None
+        self.physiboss_node_dict = {}
+
+        # self.legend_tab = None
+        self.nanoHubGUI = False
+
+        self.kw = kw
+
+        # self.csv_array = np.array([])
+
+        self.celltype_name = []
+        self.celltype_color = []
+
+        self.called_from_update = False
+
+        self.svg_frame = 0
+        self.current_dir = ''
+
         self.cell_scalar_updated = True
 
         self.cell_scalar_human2mcds_dict = {} # initialize here for vis_tab.py
@@ -1191,9 +1224,7 @@ class VisBase():
         except:
             msgBox = QMessageBox()
             msgBox.setIcon(QMessageBox.Information)
-            msg = "get_cell_types_from_config(): Error opening or parsing " + out_config_file
-            msg += ". Either the file has not been created yet or something else is wrong."
-            msgBox.setText(msg)
+            msgBox.setText("get_cell_types_from_config(): Error opening or parsing " + out_config_file)
             msgBox.setStandardButtons(QMessageBox.Ok)
             msgBox.exec()
             return False
@@ -1996,6 +2027,10 @@ class VisBase():
         # print("\n>>> calling update_plots() from "+ inspect.stack()[0][3])
         self.update_plots()
 
+        # Update VTK window if it exists
+        if hasattr(self.vis_tab, 'update_vtk_window'):
+            self.vis_tab.update_vtk_window()
+
     def cells_cmin_cmax_cb(self):
         # print("----- cells_cmin_cmax_cb:")
         try:  # due to the initial callback
@@ -2297,6 +2332,10 @@ class VisBase():
         self.current_frame = 0
         # print("\n>>> calling update_plots() from "+ inspect.stack()[0][3])
         self.update_plots()
+        
+        # Update VTK window if it exists
+        if hasattr(self.vis_tab, 'update_vtk_window'):
+            self.vis_tab.update_vtk_window()
 
     def last_svg_plot(self):
         pass
@@ -2362,7 +2401,10 @@ class VisBase():
             print('self.current_frame= ',self.current_frame)
 
         self.update_plots()
-
+        
+        # Update VTK window if it exists
+        if hasattr(self.vis_tab, 'update_vtk_window'):
+            self.vis_tab.update_vtk_window()
 
     def back_plot_cb(self, text):
         if self.reset_model_flag:
@@ -2381,7 +2423,10 @@ class VisBase():
         # print('back_plot_cb(): svg # ',self.current_svg_frame)
 
         self.update_plots()
-
+        
+        # Update VTK window if it exists
+        if hasattr(self.vis_tab, 'update_vtk_window'):
+            self.vis_tab.update_vtk_window()
 
     def forward_plot_cb(self, text):
         if self.reset_model_flag:
@@ -2393,7 +2438,10 @@ class VisBase():
         # print('svg # ',self.current_svg_frame)
 
         self.update_plots()
-
+        
+        # Update VTK window if it exists
+        if hasattr(self.vis_tab, 'update_vtk_window'):
+            self.vis_tab.update_vtk_window()
 
     # def task(self):
             # self.dc.update_figure()
@@ -2423,6 +2471,7 @@ class VisBase():
                     # self.current_svg_frame = 0
                     self.animate()
                     return
+
             else:
                 fname = "output%08d.xml" % self.current_svg_frame
                 full_fname = os.path.join(self.output_dir, fname)
@@ -3342,21 +3391,26 @@ class VisBase():
         self.cancel_movie = True
         
     def open_vtk_view_cb(self):
-        """Callback to open the VTK 3D visualization window"""
+        """Open a VTK viewer window to display the current frame in 3D"""
         try:
-            # This method will be implemented in the Vis class in vis_tab.py
-            print("Opening VTK 3D View for current frame:", self.current_frame)
-            self.open_vtk_window()
+            print(f"Opening VTK window for frame {self.current_frame}")
+            if hasattr(self, 'vis_tab'):
+                self.vis_tab.open_vtk_window()
+            else:
+                # Show error message if we can't find the vis_tab
+                from PyQt5.QtWidgets import QMessageBox
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Warning)
+                msg.setText("Could not open VTK window. Missing vis_tab reference.")
+                msg.setWindowTitle("Error")
+                msg.exec_()
         except Exception as e:
             print(f"Error opening VTK window: {str(e)}")
-            
-            # Show an error message to the user
             from PyQt5.QtWidgets import QMessageBox
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Warning)
-            msg.setText("Failed to open VTK window")
-            msg.setInformativeText(f"Error: {str(e)}")
-            msg.setWindowTitle("VTK Error")
+            msg.setText(f"Error opening VTK window: {str(e)}")
+            msg.setWindowTitle("Error")
             msg.exec_()
 
 

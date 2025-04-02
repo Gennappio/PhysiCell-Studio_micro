@@ -83,6 +83,9 @@ class Vis(VisBase, QWidget):
 
         super(Vis,self).__init__(studio_flag=studio_flag, rules_flag=rules_flag,  nanohub_flag=nanohub_flag, config_tab=config_tab, microenv_tab=microenv_tab, celldef_tab=celldef_tab, user_params_tab=user_params_tab, rules_tab=rules_tab, ics_tab=ics_tab, run_tab=run_tab, model3D_flag=model3D_flag,tensor_flag=tensor_flag, ecm_flag=ecm_flag)
 
+        # Set self as the vis_tab reference in the parent class
+        self.vis_tab = self
+
         self.figure = None
         # self.png_frame = 0
 
@@ -347,6 +350,9 @@ class Vis(VisBase, QWidget):
         self.frame_count.setText(str(self.current_frame))
         self.called_from_update = False
 
+        # Ensure the current_svg_frame is also synced with current_frame
+        self.current_svg_frame = self.current_frame
+        
         self.canvas.update()
         self.canvas.draw()
 
@@ -356,6 +362,9 @@ class Vis(VisBase, QWidget):
             print("---->  ", png_file)
             self.figure.savefig(png_file)
 
+        # Ensure the VTK window is updated with the current frame
+        if hasattr(self, 'vtk_win') and self.vtk_win is not None:
+            self.update_vtk_window()
 
     #------------------------------
     # Depends on 2D/3D
@@ -1044,7 +1053,6 @@ class Vis(VisBase, QWidget):
         else:
             self.ax0.set_aspect('auto')
 
-
     #------------------------------------------------------------
     def plot_substrate(self, frame):
 
@@ -1216,20 +1224,25 @@ class Vis(VisBase, QWidget):
         from vtk.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
         
         # Create a VTK window
-        vtk_win = vtk.vtkRenderWindow()
-        vtk_win.SetSize(800, 600)
-        vtk_win.SetWindowName(f"PhysiCell VTK Viewer - Frame {self.current_frame}")
+        self.vtk_win = vtk.vtkRenderWindow()
+        self.vtk_win.SetSize(800, 600)
+        self.vtk_win.SetWindowName(f"PhysiCell VTK Viewer - Frame {self.current_frame}")
         
         # Create renderer and interactor
-        renderer = vtk.vtkRenderer()
-        vtk_win.AddRenderer(renderer)
-        interactor = vtk.vtkRenderWindowInteractor()
-        interactor.SetRenderWindow(vtk_win)
+        self.renderer = vtk.vtkRenderer()
+        self.vtk_win.AddRenderer(self.renderer)
+        self.interactor = vtk.vtkRenderWindowInteractor()
+        self.interactor.SetRenderWindow(self.vtk_win)
         style = vtk.vtkInteractorStyleTrackballCamera()
-        interactor.SetInteractorStyle(style)
+        self.interactor.SetInteractorStyle(style)
+        
+        # Create a timer to update the VTK window text regularly
+        self.vtk_timer = QtCore.QTimer()
+        self.vtk_timer.timeout.connect(self.update_vtk_window)
+        self.vtk_timer.start(500)  # Check every 500 ms
         
         try:
-            # Try to load cell data from model output
+            # Try to load cell data from model output for the current frame
             xml_file_root = "output%08d.xml" % self.current_frame
             xml_file = os.path.join(self.output_dir, xml_file_root)
             
@@ -1315,40 +1328,75 @@ class Vis(VisBase, QWidget):
                 
                 actor = vtk.vtkActor()
                 actor.SetMapper(mapper)
-                renderer.AddActor(actor)
+                self.renderer.AddActor(actor)
                 
-                # Add info text
+                # Get the time information from the SVG title if possible
+                mins = mcds.get_time()
+                hrs = int(mins/60)
+                days = int(hrs/24)
+                time_str = f"{days}d, {hrs-days*24}h, {int(mins-hrs*60)}m"
+                
+                # Add info text about XML file
                 text_actor = vtk.vtkTextActor()
-                text_actor.SetInput(f"PhysiCell Frame {self.current_frame} - {num_cells} cells")
-                text_actor.GetTextProperty().SetFontSize(14)
-                text_actor.GetTextProperty().SetColor(1, 1, 1)  # White text
-                text_actor.SetPosition(10, 10)
-                renderer.AddActor2D(text_actor)
+                text_actor.SetInput(f"PhysiCell Frame {self.current_frame} - {num_cells} cells - {time_str}")
+                text_actor.GetTextProperty().SetFontSize(16)
+                text_actor.GetTextProperty().SetColor(1, 1, 1)  # Change to white text
+                text_actor.SetPosition(20, 40)  # Adjust position slightly
+                self.renderer.AddActor2D(text_actor)
+                
+                # Add text about which file was used
+                file_info = vtk.vtkTextActor()
+                file_info.SetInput(f"FILE: {xml_file}")
+                file_info.GetTextProperty().SetFontSize(16)
+                file_info.GetTextProperty().SetColor(1, 1, 1)  # Change to white text
+                file_info.SetPosition(20, 60)  # Adjust position slightly
+                self.renderer.AddActor2D(file_info)
                 
                 print(f"Loaded {num_cells} cells from frame {self.current_frame}")
             else:
-                # Add a default sphere if no data available
-                self.create_demo_sphere(renderer)
+                # Try loading from SVG file if XML is not available
+                svg_file = f"snapshot{self.current_frame:08d}.svg"
+                svg_path = os.path.join(self.output_dir, svg_file)
+                
+                if os.path.exists(svg_path):
+                    print(f"Found SVG file: {svg_path}")
+                    file_info = vtk.vtkTextActor()
+                    file_info.SetInput(f"FILE: {svg_path}")
+                    file_info.GetTextProperty().SetFontSize(16)
+                    file_info.GetTextProperty().SetColor(1, 1, 1)  # Change to white text
+                    file_info.SetPosition(20, 60)  # Adjust position slightly
+                    self.renderer.AddActor2D(file_info)
+                    
+                    # Add a message about XML vs SVG
+                    svg_info = vtk.vtkTextActor()
+                    svg_info.SetInput("SVG files contain limited position data. Full 3D visualization requires XML output.")
+                    svg_info.GetTextProperty().SetFontSize(13)
+                    svg_info.GetTextProperty().SetColor(1, 0.5, 0.5)  # Brighter color
+                    svg_info.SetPosition(20, 80)  # Adjust position slightly
+                    self.renderer.AddActor2D(svg_info)
+                
+                # Add a default sphere anyway
+                self.create_demo_sphere(self.renderer)
                 
                 # Add text explaining no data found
                 text_actor = vtk.vtkTextActor()
                 text_actor.SetInput(f"No cell data found for frame {self.current_frame}")
-                text_actor.GetTextProperty().SetFontSize(14)
-                text_actor.GetTextProperty().SetColor(1, 1, 1)  # White text
-                text_actor.SetPosition(10, 10)
-                renderer.AddActor2D(text_actor)
+                text_actor.GetTextProperty().SetFontSize(16)
+                text_actor.GetTextProperty().SetColor(1, 1, 1)  # Change to white text
+                text_actor.SetPosition(20, 40)  # Adjust position slightly
+                self.renderer.AddActor2D(text_actor)
         except Exception as e:
             print(f"Error loading cell data: {e}")
             # Add a default sphere
-            self.create_demo_sphere(renderer)
+            self.create_demo_sphere(self.renderer)
             
             # Add error text
             text_actor = vtk.vtkTextActor()
             text_actor.SetInput(f"Error loading data: {str(e)}")
-            text_actor.GetTextProperty().SetFontSize(14)
-            text_actor.GetTextProperty().SetColor(1, 1, 1)  # White text
-            text_actor.SetPosition(10, 10)
-            renderer.AddActor2D(text_actor)
+            text_actor.GetTextProperty().SetFontSize(16)
+            text_actor.GetTextProperty().SetColor(1, 1, 1)  # Change to white text
+            text_actor.SetPosition(20, 40)  # Adjust position slightly
+            self.renderer.AddActor2D(text_actor)
         
         # Add axes for orientation
         axes = vtk.vtkAxesActor()
@@ -1360,7 +1408,7 @@ class Vis(VisBase, QWidget):
         # Position the axes widget
         axes_widget = vtk.vtkOrientationMarkerWidget()
         axes_widget.SetOrientationMarker(axes)
-        axes_widget.SetInteractor(interactor)
+        axes_widget.SetInteractor(self.interactor)
         axes_widget.SetViewport(0.0, 0.0, 0.2, 0.2)
         axes_widget.EnabledOn()
         axes_widget.InteractiveOff()
@@ -1370,20 +1418,27 @@ class Vis(VisBase, QWidget):
         help_text.SetInput("Left mouse: Rotate | Right mouse: Zoom | Middle mouse: Pan")
         help_text.GetTextProperty().SetFontSize(12)
         help_text.GetTextProperty().SetColor(1, 1, 1)  # White text
-        help_text.SetPosition(10, 570)
-        renderer.AddActor2D(help_text)
+        help_text.SetPosition(20, 80)  # Adjust position slightly
+        self.renderer.AddActor2D(help_text)
         
         # Set background color
-        renderer.SetBackground(0.1, 0.2, 0.3)  # Dark blue
+        self.renderer.SetBackground(0.1, 0.2, 0.3)  # Dark blue
         
         # Reset camera to show all objects
-        renderer.ResetCamera()
+        self.renderer.ResetCamera()
         
         # Start interaction
-        vtk_win.Render()
-        interactor.Initialize()
-        interactor.Start()
+        self.vtk_win.Render()
+        self.interactor.Initialize()
+        self.interactor.Start()
     
+        # Store the renderer as an attribute for later access
+        self.renderer = self.renderer
+
+        # Ensure the VTK text is updated with the current frame's file name
+        if hasattr(self, 'renderer'):
+            self.update_vtk_text(self.renderer)
+
     def create_demo_sphere(self, renderer):
         """Create a demo sphere for the VTK window when no data is available"""
         import vtk
@@ -1406,3 +1461,79 @@ class Vis(VisBase, QWidget):
         
         # Add actor to renderer
         renderer.AddActor(actor)
+
+        # Add a 'Hello World' text actor
+        hello_text = vtk.vtkTextActor()
+        hello_text.SetInput(f"FILE: snapshot{self.current_frame:08d}.svg")
+        hello_text.GetTextProperty().SetFontSize(20)
+        hello_text.GetTextProperty().SetColor(1, 1, 1)  # White text
+        hello_text.SetPosition(100, 100)  # Position it clearly visible
+        renderer.AddActor2D(hello_text)
+
+    def update_vtk_text(self, renderer):
+        """Update the text actor with the current frame's file name."""
+        print(f"=== update_vtk_text called for frame {self.current_frame} ===")
+        import vtk
+        
+        if not hasattr(self, 'vtk_win') or self.vtk_win is None:
+            print("VTK window not initialized - skipping text update")
+            return
+        
+        # Remove existing text actors
+        print("Removing existing text actors")
+        actors_to_remove = []
+        for actor in renderer.GetActors2D():
+            if isinstance(actor, vtk.vtkTextActor):
+                actors_to_remove.append(actor)
+        
+        for actor in actors_to_remove:
+            renderer.RemoveActor2D(actor)
+        
+        # Add updated text actor
+        print(f"Adding new text actor for frame {self.current_frame}")
+        file_info = vtk.vtkTextActor()
+        file_info.SetInput(f"FILE: snapshot{self.current_frame:08d}.svg")
+        file_info.GetTextProperty().SetFontSize(24)  # Larger text
+        file_info.GetTextProperty().SetColor(1, 1, 0)  # Bright yellow text
+        file_info.SetPosition(100, 100)  # Position it clearly visible
+        renderer.AddActor2D(file_info)
+        
+        # Add info about current frame
+        frame_info = vtk.vtkTextActor()
+        frame_info.SetInput(f"CURRENT FRAME: {self.current_frame}")
+        frame_info.GetTextProperty().SetFontSize(24)
+        frame_info.GetTextProperty().SetColor(1, 1, 0)  # Bright yellow text
+        frame_info.SetPosition(100, 150)
+        renderer.AddActor2D(frame_info)
+        
+        # Re-render the window
+        print("Rendering VTK window")
+        try:
+            renderer.GetRenderWindow().Render()
+        except Exception as e:
+            print(f"Error rendering VTK window: {e}")
+        
+        print("=== update_vtk_text completed ===")
+
+    def update_vtk_window(self):
+        """Update the VTK window to reflect the current frame"""
+        import vtk
+        
+        # Skip if VTK window isn't open
+        if not hasattr(self, 'vtk_win') or self.vtk_win is None:
+            return
+        
+        print(f"Updating VTK window for frame {self.current_frame}")
+        
+        # Update window title
+        self.vtk_win.SetWindowName(f"PhysiCell VTK Viewer - Frame {self.current_frame}")
+        
+        # Update text actors
+        self.update_vtk_text(self.renderer)
+        
+        # Reset camera and render
+        self.renderer.ResetCamera()
+        self.vtk_win.Render()
+        
+        print("VTK window update complete")
+        
