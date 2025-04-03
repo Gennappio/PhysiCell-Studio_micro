@@ -3391,26 +3391,36 @@ class VisBase():
         self.cancel_movie = True
         
     def open_vtk_view_cb(self):
-        """Open a VTK viewer window to display the current frame in 3D"""
+        """Open a VTK 3D visualization window."""
         try:
             print(f"Opening VTK window for frame {self.current_frame}")
-            if hasattr(self, 'vis_tab'):
-                self.vis_tab.open_vtk_window()
-            else:
-                # Show error message if we can't find the vis_tab
-                from PyQt5.QtWidgets import QMessageBox
-                msg = QMessageBox()
-                msg.setIcon(QMessageBox.Warning)
-                msg.setText("Could not open VTK window. Missing vis_tab reference.")
-                msg.setWindowTitle("Error")
-                msg.exec_()
+            import vtk_view
+            
+            # On macOS, UI windows must be created on the main thread
+            # Instead of creating a background thread, we'll use a single-shot timer
+            # to run the VTK window on the main thread after the current event loop iteration
+            from PyQt5.QtCore import QTimer
+            
+            # Define function to open VTK viewer
+            def open_vtk_window():
+                # Open the VTK window with the current frame and cell colors
+                self.vtk_viewer = vtk_view.open_vtk_view(
+                    self.output_dir, 
+                    self.current_frame,
+                    self.cell_colors
+                )
+            
+            # Use a single-shot timer to ensure this runs on the main thread
+            # after the current event loop iteration completes
+            QTimer.singleShot(0, open_vtk_window)
+            
         except Exception as e:
-            print(f"Error opening VTK window: {str(e)}")
+            print(f"Error opening VTK window: {e}")
             from PyQt5.QtWidgets import QMessageBox
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Warning)
             msg.setText(f"Error opening VTK window: {str(e)}")
-            msg.setWindowTitle("Error")
+            msg.setWindowTitle("VTK Error")
             msg.exec_()
 
 
